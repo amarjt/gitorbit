@@ -1,6 +1,6 @@
 {
   "name": "obsidian-gitorbit",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Pure-JS multi-device Git sync for Obsidian vaults via private GitHub repositories",
   "main": "main.js",
   "scripts": {
