@@ -1,0 +1,32 @@
+{
+  "name": "obsidian-gitorbit",
+  "version": "1.0.0",
+  "description": "Pure-JS multi-device Git sync for Obsidian vaults via private GitHub repositories",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "git",
+    "sync",
+    "github",
+    "isomorphic-git"
+  ],
+  "author": "GitOrbit Contributors",
+  "license": "MIT",
+  "dependencies": {
+    "buffer": "^6.0.3",
+    "isomorphic-git": "^1.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.20.0",
+    "obsidian": "latest",
+    "tslib": "^2.6.0",
+    "typescript": "^5.3.0"
+  }
+}

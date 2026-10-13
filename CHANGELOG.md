@@ -1,0 +1,24 @@
+# Changelog
+
+All notable changes to **GitOrbit** will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [1.0.0] - 2026-10-13
+
+### Added
+- **Pure JavaScript Git Synchronization**: End-to-end sync using `isomorphic-git`, Obsidian's `DataAdapter`, and `requestUrl` (bypassing CORS, requiring no command-line git binaries).
+- **Dual Authentication Suite**:
+  - OAuth 2.0 Device Authorization Grant with in-browser one-time code verification.
+  - Personal Access Token (PAT) authentication supporting private repositories (Classic and Fine-grained tokens).
+- **Cross-Platform Buffer Polyfill**: Bundled `buffer` package with global injection shim (`src/buffer-shim.ts`) enabling full functionality on iOS and Android WebViews.
+- **Resilient Mobile Device Flow Polling**: Network error handling (`try/catch` retry loop) preventing login freezes during app switching and background sleep on Android.
+- **Physical Disk Checkout on Merge**: Working tree checkout (`git.checkout({ force: true })`) ensuring merged remote changes are written directly to Obsidian vault files on disk.
+- **Visual Conflict Resolution Modal**: Side-by-side diff preview between local and remote versions with one-click resolution (`Keep Mine`, `Keep Theirs`, `Open in Editor`).
+- **Real-Time Status Bar**: Interactive status bar item with 5 UX states (`idle`, `pulling`, `pushing`, `conflict`, `error`, `connecting`).
+- **Debounced Sync Queue**: Mutex-locked file queue with configurable debounce delay (default: 3000ms).
+- **Hot Reload Compatibility**: Bundled empty `.hotreload` marker for in-place live reloading.
+- **Strict Teardown Hygiene**: Zero-leak lifecycle in `onunload()` releasing DOM listeners, clearing timers, and draining pending file queues.
