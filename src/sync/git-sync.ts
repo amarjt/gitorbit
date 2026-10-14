@@ -53,6 +53,7 @@ export class GitSync {
   private remoteUrl: string;
   private authorName: string;
   private authorEmail: string;
+  private latestRemoteHead: string | null = null;
 
   constructor(
     adapter: DataAdapter,
@@ -117,13 +118,21 @@ export class GitSync {
   /** Fetch from remote origin */
   private async safeFetch(): Promise<string | null> {
     try {
-      await git.fetch({
+      const res = await git.fetch({
         ...this.netOpts(),
+        remote: "origin",
         ref: DEFAULT_BRANCH,
+        remoteRef: DEFAULT_BRANCH,
         singleBranch: true,
+        tags: false,
       });
-      return await git.resolveRef({ fs: this.fs, dir: this.dir, ref: "FETCH_HEAD" });
-    } catch {
+      const head = res.fetchHead ?? null;
+      if (head) {
+        this.latestRemoteHead = head;
+      }
+      return head;
+    } catch (err) {
+      console.warn("GitOrbit safeFetch failed:", err);
       return null;
     }
   }
@@ -133,7 +142,6 @@ export class GitSync {
     await git.clone({
       ...this.netOpts(),
       singleBranch: true,
-      depth: 1,
     });
     // Ensure working tree is checked out to disk
     try {
@@ -147,6 +155,64 @@ export class GitSync {
       // Empty remote repo
     }
     return this.hasLocalBranch();
+  }
+
+  /** Reconciles remote commit into local working tree */
+  private async reconcileRemote(remoteOid: string): Promise<void> {
+    const localHead = await git.resolveRef({
+      fs: this.fs,
+      dir: this.dir,
+      ref: DEFAULT_BRANCH,
+    });
+
+    if (remoteOid !== localHead) {
+      await git.merge({
+        fs: this.fs,
+        dir: this.dir,
+        ours: DEFAULT_BRANCH,
+        theirs: remoteOid,
+        author: { name: this.authorName, email: this.authorEmail },
+        message: "sync: merge remote changes",
+        fastForward: true,
+        fastForwardOnly: false,
+        allowUnrelatedHistories: true,
+      });
+
+      // Write updated remote files to physical disk (Issue #4 fix)
+      await git.checkout({
+        fs: this.fs,
+        dir: this.dir,
+        ref: DEFAULT_BRANCH,
+        force: true,
+      });
+    }
+  }
+
+  /** Pushes to remote with auto-recovery retry on non-fast-forward rejection */
+  private async pushWithRecovery(retryCount = 1): Promise<void> {
+    try {
+      await git.push({
+        ...this.netOpts(),
+        ref: DEFAULT_BRANCH,
+        force: false,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isNonFastForward =
+        msg.includes("not a simple fast-forward") ||
+        msg.includes("Push rejected") ||
+        msg.includes("PushRejectedError");
+
+      if (retryCount > 0 && isNonFastForward) {
+        console.log("GitOrbit: Push rejected (non-fast-forward). Re-fetching remote and reconciling...");
+        const freshHead = await this.safeFetch();
+        if (freshHead) {
+          await this.reconcileRemote(freshHead);
+          return await this.pushWithRecovery(retryCount - 1);
+        }
+      }
+      throw err;
+    }
   }
 
   /** Initial vault snapshot creation and initial push */
@@ -193,11 +259,7 @@ export class GitSync {
       url: this.remoteUrl,
     });
 
-    await git.push({
-      ...this.netOpts(),
-      ref: DEFAULT_BRANCH,
-      force: false,
-    });
+    await this.pushWithRecovery();
   }
 
   /** Full sync cycle: stage -> commit -> fetch -> merge & checkout disk -> push */
@@ -240,31 +302,7 @@ export class GitSync {
 
       // 4. Merge remote & Checkout working tree to disk
       if (fetchHead && (await this.hasLocalBranch())) {
-        const localHead = await git.resolveRef({
-          fs: this.fs,
-          dir: this.dir,
-          ref: DEFAULT_BRANCH,
-        });
-
-        if (fetchHead !== localHead) {
-          await git.merge({
-            fs: this.fs,
-            dir: this.dir,
-            ours: DEFAULT_BRANCH,
-            theirs: fetchHead,
-            author: { name: this.authorName, email: this.authorEmail },
-            message: "sync: merge remote changes",
-            fastForwardOnly: false,
-          });
-
-          // Write updated remote files to physical disk (Issue #4 fix)
-          await git.checkout({
-            fs: this.fs,
-            dir: this.dir,
-            ref: DEFAULT_BRANCH,
-            force: true,
-          });
-        }
+        await this.reconcileRemote(fetchHead);
       }
 
       // 5. Detect conflicts
@@ -281,10 +319,7 @@ export class GitSync {
 
       // 6. Push local branch if zero conflicts
       if (conflicts.length === 0 && (await this.hasLocalBranch())) {
-        await git.push({
-          ...this.netOpts(),
-          ref: DEFAULT_BRANCH,
-        });
+        await this.pushWithRecovery();
       }
 
       return { success: conflicts.length === 0, conflictFiles: conflicts };
@@ -303,10 +338,7 @@ export class GitSync {
       ...this.gitOpts(),
       message: `sync: resolve conflict in ${filepath}`,
     });
-    await git.push({
-      ...this.netOpts(),
-      ref: DEFAULT_BRANCH,
-    });
+    await this.pushWithRecovery();
   }
 
   /** Pull only on vault startup, with automatic disk checkout */
@@ -316,31 +348,7 @@ export class GitSync {
     const fetchHead = await this.safeFetch();
     if (!fetchHead) return;
 
-    const localHead = await git.resolveRef({
-      fs: this.fs,
-      dir: this.dir,
-      ref: DEFAULT_BRANCH,
-    });
-
-    if (fetchHead !== localHead) {
-      await git.merge({
-        fs: this.fs,
-        dir: this.dir,
-        ours: DEFAULT_BRANCH,
-        theirs: fetchHead,
-        author: { name: this.authorName, email: this.authorEmail },
-        message: "sync: merge remote changes",
-        fastForwardOnly: false,
-      });
-
-      // Checkout working tree so files appear updated on disk
-      await git.checkout({
-        fs: this.fs,
-        dir: this.dir,
-        ref: DEFAULT_BRANCH,
-        force: true,
-      });
-    }
+    await this.reconcileRemote(fetchHead);
   }
 
   private async readFileContent(filepath: string): Promise<string> {
@@ -357,11 +365,20 @@ export class GitSync {
 
   private async readRemoteFileContent(filepath: string): Promise<string> {
     try {
-      const remoteCommit = await git.resolveRef({
-        fs: this.fs,
-        dir: this.dir,
-        ref: `refs/remotes/origin/${DEFAULT_BRANCH}`,
-      });
+      let remoteCommit: string;
+      try {
+        remoteCommit = await git.resolveRef({
+          fs: this.fs,
+          dir: this.dir,
+          ref: `refs/remotes/origin/${DEFAULT_BRANCH}`,
+        });
+      } catch {
+        if (this.latestRemoteHead) {
+          remoteCommit = this.latestRemoteHead;
+        } else {
+          return "";
+        }
+      }
       const { blob } = await git.readBlob({
         fs: this.fs,
         dir: this.dir,

@@ -158,7 +158,12 @@ export default class GitOrbitPlugin extends Plugin {
         new Notice(`GitOrbit: Cloned repo ${username}/${repoName}`);
       }
     } else {
-      new Notice(`GitOrbit: Linked to ${username}/${repoName}`);
+      try {
+        await sync.pull();
+      } catch (err) {
+        console.warn("GitOrbit: Initial pull warning:", err);
+      }
+      new Notice(`GitOrbit: Linked & synced with ${username}/${repoName}`);
     }
 
     this.settings.lastSyncTime = Date.now();

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.2] - 2026-10-15
+
+### Fixed
+- **Mobile Non-Fast-Forward Push Rejection**: Resolved the error `GitOrbit: Sync error: push rejected because it was not a simple fast-forward. Use "force: true" to override.` experienced when syncing across mobile and desktop devices.
+- **`safeFetch()` Return Value Resolution**: Fixed silent failure where `git.resolveRef("FETCH_HEAD")` threw and caught errors, causing the plugin to bypass remote merge and disk checkout cycles entirely.
+- **Unrelated Histories Reconciliation**: Added `allowUnrelatedHistories: true` to `git.merge` so separate device initial commits merge cleanly without throwing `MergeNotSupportedError`.
+- **Full History Clone**: Removed `depth: 1` shallow clone limitation to ensure complete commit ancestor graph availability for merge base calculations.
+- **Automated Push Recovery**: Added an intelligent 1-pass auto-recovery retry loop when `PushRejectedError` occurs, automatically fetching the latest remote commit, executing a 3-way merge, writing updated files to disk, and retrying the push.
+
 ## [1.0.0] - 2026-10-13
 
 ### Added
