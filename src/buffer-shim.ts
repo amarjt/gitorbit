@@ -6,8 +6,20 @@
  */
 import { Buffer } from "buffer";
 
-if (typeof globalThis.Buffer === "undefined") {
-  globalThis.Buffer = Buffer;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const g = typeof globalThis !== "undefined" ? (globalThis as any) : (window as any);
+
+
+if (typeof g.Buffer === "undefined") {
+  g.Buffer = Buffer;
+}
+if (typeof window !== "undefined" && typeof (window as any).Buffer === "undefined") {
+  (window as any).Buffer = Buffer;
+}
+
+if (typeof g.process === "undefined") {
+  g.process = { env: {}, browser: true, platform: "browser" };
 }
 
 export { Buffer };
+

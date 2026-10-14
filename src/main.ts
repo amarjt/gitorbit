@@ -30,6 +30,12 @@ export default class GitOrbitPlugin extends Plugin {
       callback: () => this.triggerManualSync(),
     });
 
+    this.addCommand({
+      id: "gitorbit-repair",
+      name: "Repair and clean local git repository",
+      callback: () => this.repairRepository(),
+    });
+
     // 4. Boot engine if already configured
     if (
       this.settings.githubToken &&
@@ -247,6 +253,21 @@ export default class GitOrbitPlugin extends Plugin {
       const msg = err instanceof Error ? err.message : String(err);
       this.setStatus("error", msg);
       new Notice(`GitOrbit: Sync failed: ${msg}`);
+    }
+  }
+
+  async repairRepository(): Promise<void> {
+    if (!this.gitSync) {
+      new Notice("GitOrbit: Not connected. Please connect in GitOrbit settings first.");
+      return;
+    }
+    this.setStatus("connecting", "Repairing...");
+    const result = await this.gitSync.repairGitRepository();
+    this.setStatus("idle");
+    if (result.cleanedCount > 0) {
+      new Notice(`GitOrbit: Repaired repository. Cleaned ${result.cleanedCount} corrupted/stale item(s).`);
+    } else {
+      new Notice("GitOrbit: Repository check passed. Zero corrupted objects found.");
     }
   }
 

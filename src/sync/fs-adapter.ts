@@ -29,18 +29,45 @@ export function createFsAdapter(adapter: DataAdapter, vaultPath: string) {
     return normalized.replace(/^\//, "");
   }
 
-  const promises = {
-    async readFile(path: string, options?: { encoding?: string }): Promise<Buffer | string> {
+  async function ensureDir(dirPath: string): Promise<void> {
+    const segments = dirPath.split("/").filter(Boolean);
+    let current = "";
+    for (const seg of segments) {
+      current = current ? `${current}/${seg}` : seg;
       try {
-        const content = await adapter.readBinary(rel(path));
-        if (options?.encoding === "utf8") {
-          return Buffer.from(content).toString("utf8");
+        await adapter.mkdir(current);
+      } catch {
+        // Directory already exists
+      }
+    }
+  }
+
+  const promises = {
+    async readFile(path: string, options?: { encoding?: string } | string): Promise<Buffer | string> {
+      const encoding = typeof options === "string" ? options : options?.encoding;
+      const relativePath = rel(path);
+      try {
+        if (encoding === "utf8") {
+          return await adapter.read(relativePath);
+        }
+        const content = await adapter.readBinary(relativePath);
+        // Guard against corrupted 0-byte git objects on mobile or aborted writes
+        if (relativePath.includes(".git/objects/") && content.byteLength === 0) {
+          try {
+            await adapter.remove(relativePath);
+          } catch {
+            // Safe to ignore
+          }
+          const err: NodeJS.ErrnoException = new Error(`ENOENT: 0-byte corrupted git object '${relativePath}' removed`);
+          err.code = "ENOENT";
+          throw err;
         }
         return Buffer.from(content);
-      } catch {
-        const err: NodeJS.ErrnoException = new Error(`ENOENT: no such file or directory, open '${path}'`);
-        err.code = "ENOENT";
-        throw err;
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") throw err;
+        const errObj: NodeJS.ErrnoException = new Error(`ENOENT: no such file or directory, open '${path}'`);
+        errObj.code = "ENOENT";
+        throw errObj;
       }
     },
 
@@ -49,21 +76,18 @@ export function createFsAdapter(adapter: DataAdapter, vaultPath: string) {
       const parts = relativePath.split("/");
       if (parts.length > 1) {
         const dir = parts.slice(0, -1).join("/");
-        try {
-          await adapter.mkdir(dir);
-        } catch {
-          // Parent directory already exists
-        }
+        await ensureDir(dir);
       }
 
       if (typeof data === "string") {
         await adapter.write(relativePath, data);
       } else {
-        const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-        const arrayBuf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+        const u8 = data instanceof Uint8Array ? data : new Uint8Array(Buffer.from(data));
+        const arrayBuf = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer;
         await adapter.writeBinary(relativePath, arrayBuf);
       }
     },
+
 
     async unlink(path: string): Promise<void> {
       try {
@@ -87,11 +111,7 @@ export function createFsAdapter(adapter: DataAdapter, vaultPath: string) {
     },
 
     async mkdir(path: string, _options?: unknown): Promise<void> {
-      try {
-        await adapter.mkdir(rel(path));
-      } catch {
-        // Directory exists
-      }
+      await ensureDir(rel(path));
     },
 
     async rmdir(_path: string): Promise<void> {

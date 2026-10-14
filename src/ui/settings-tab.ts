@@ -223,6 +223,18 @@ export class GitOrbitSettingsTab extends PluginSettingTab {
         })
       );
 
+    new Setting(containerEl)
+      .setName("Repair & clean local repository")
+      .setDesc("Scans for and purges corrupted 0-byte objects, orphan pack indexes, and stale lock files caused by crashes or aborted operations.")
+      .addButton((btn) =>
+        btn.setButtonText("Repair Repository").onClick(async () => {
+          btn.setButtonText("Repairing...").setDisabled(true);
+          await this.plugin.repairRepository();
+          btn.setButtonText("Repair Repository").setDisabled(false);
+        })
+      );
+
+
     if (settings.lastSyncTime > 0) {
       const lastSync = new Date(settings.lastSyncTime).toLocaleString();
       containerEl.createEl("p", {

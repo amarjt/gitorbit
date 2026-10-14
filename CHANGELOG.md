@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.4] - 2026-10-15
+
+### Fixed
+- **Mobile Decompression Buffer Error**: Fixed `invalid compressed buffer: buffer error` caused by 0-byte corrupt objects and truncated stream decompression in Android/iOS WebViews.
+- **Corrupted 0-Byte Object Auto-Purge**: In `fs-adapter`, detect when a read on `.git/objects/` encounters a 0-byte file (from previous interrupted writes or crashes), automatically delete the corrupt file, and throw `ENOENT` so isomorphic-git falls back cleanly to packed objects or retrieves fresh data.
+- **Pristine ArrayBuffer Alignment**: Replaced ambiguous `Buffer.from(data).buffer.slice(...)` with zero-offset `new Uint8Array(data).buffer.slice(...)` copy, preventing buffer pool offset misalignment on mobile WebViews.
+- **Recursive Directory Creation**: Added `ensureDir` helper in `fs-adapter` to guarantee nested git object folders (`.git/objects/xx`, `.git/objects/pack/`) are safely instantiated before writing binary files.
+- **Dual String/Object Encoding Support**: Added explicit support for `options === 'utf8'` in `fs-adapter.readFile`, preventing raw buffer returns when isomorphic-git requests UTF-8 configuration files.
+
+### Added
+- **Automated Repository Self-Healing**: `repairGitRepository()` runs before every sync to sweep 0-byte loose objects, stale `.lock` files (`index.lock`, `HEAD.lock`), and truncated/orphan pack files.
+- **Compressed Buffer Error Auto-Recovery**: If `sync()` ever encounters a `DecompressionError` or `buffer error`, it automatically executes a deep repository repair and retries the sync cycle seamlessly.
+- **"Repair & Clean Repository" Settings Button & Command**: Added a manual maintenance action in GitOrbit settings and the Obsidian command palette (`GitOrbit: Repair and clean local git repository`) for on-demand repair.
+
 ## [1.0.3] - 2026-10-15
 
 ### Fixed

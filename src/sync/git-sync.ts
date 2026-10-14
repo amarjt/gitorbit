@@ -29,7 +29,7 @@ const gitHttp: git.HttpClient = {
       throw: false,
     });
 
-    const arrayBuffer = response.arrayBuffer;
+    const arrayBuffer = response.arrayBuffer ?? new ArrayBuffer(0);
     async function* responseBody() {
       yield new Uint8Array(arrayBuffer);
     }
@@ -40,12 +40,13 @@ const gitHttp: git.HttpClient = {
       statusCode: response.status,
       statusMessage: "OK",
       body: responseBody(),
-      headers: response.headers as Record<string, string>,
+      headers: (response.headers ?? {}) as Record<string, string>,
     };
   },
 };
 
 export class GitSync {
+  private adapter: DataAdapter;
   private fs: ReturnType<typeof createFsAdapter>;
   private dir: string;
   private token: string;
@@ -64,6 +65,7 @@ export class GitSync {
     authorName: string = "GitOrbit",
     authorEmail: string = "sync@gitorbit.local"
   ) {
+    this.adapter = adapter;
     this.fs = createFsAdapter(adapter, vaultPath);
     this.dir = vaultPath;
     this.token = token;
@@ -72,6 +74,7 @@ export class GitSync {
     this.authorName = authorName;
     this.authorEmail = authorEmail;
   }
+
 
   private gitOpts() {
     return {
@@ -93,6 +96,119 @@ export class GitSync {
         throw new Error("GitHub authentication failed. Please check your token or reconnect in GitOrbit settings.");
       },
     };
+  }
+
+  /**
+   * Sweeps and repairs corrupted git repository state:
+   * 1. Removes 0-byte loose objects in .git/objects/
+   * 2. Removes stale .tmp, 0-byte .pack, and orphan .idx files in .git/objects/pack/
+   * 3. Removes stale .lock files (.git/index.lock, etc.)
+   * 4. Deletes 0-byte .git/index if corrupted so git can regenerate it cleanly
+   */
+  async repairGitRepository(): Promise<{ repaired: boolean; cleanedCount: number; details: string[] }> {
+    let cleanedCount = 0;
+    const details: string[] = [];
+
+    const removeFileSafe = async (relPath: string, reason: string) => {
+      try {
+        await this.adapter.remove(relPath);
+        cleanedCount++;
+        details.push(`${reason}: ${relPath}`);
+      } catch {
+        // Safe to ignore
+      }
+    };
+
+    try {
+      // 1. Remove stale lock files that block git operations
+      const lockFiles = [".git/index.lock", ".git/HEAD.lock", ".git/config.lock"];
+      for (const lock of lockFiles) {
+        try {
+          const s = await this.adapter.stat(lock);
+          if (s) {
+            await removeFileSafe(lock, "Removed stale lock");
+          }
+        } catch {
+          // lock not present
+        }
+      }
+
+      // 2. Check for empty/corrupted 0-byte .git/index
+      try {
+        const indexStat = await this.adapter.stat(".git/index");
+        if (indexStat && indexStat.size === 0) {
+          await removeFileSafe(".git/index", "Removed empty 0-byte index file");
+        }
+      } catch {
+        // index not present
+      }
+
+      // 3. Scan .git/objects/ for 0-byte loose objects
+      try {
+        const objListing = await this.adapter.list(".git/objects");
+        for (const folder of objListing.folders) {
+          const folderName = folder.split("/").pop()!;
+          if (/^[0-9a-f]{2}$/i.test(folderName)) {
+            try {
+              const subListing = await this.adapter.list(folder);
+              for (const file of subListing.files) {
+                const s = await this.adapter.stat(file);
+                if (s && s.size === 0) {
+                  await removeFileSafe(file, "Removed 0-byte corrupted loose object");
+                }
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+      } catch {
+        // objects folder not present
+      }
+
+      // 4. Scan .git/objects/pack/ for corrupt/truncated packfiles & orphan indexes
+      try {
+        const packListing = await this.adapter.list(".git/objects/pack");
+        const idxBases = new Set<string>();
+        const packBases = new Set<string>();
+
+        for (const file of packListing.files) {
+          const s = await this.adapter.stat(file);
+          if (file.endsWith(".tmp")) {
+            await removeFileSafe(file, "Removed temporary pack download file");
+          } else if (file.endsWith(".pack")) {
+            if (s && s.size < 32) {
+              await removeFileSafe(file, "Removed corrupted/truncated packfile (< 32 bytes)");
+            } else {
+              packBases.add(file.slice(0, -5));
+            }
+          } else if (file.endsWith(".idx")) {
+            if (s && s.size === 0) {
+              await removeFileSafe(file, "Removed 0-byte pack index");
+            } else {
+              idxBases.add(file.slice(0, -4));
+            }
+          }
+        }
+
+        // Clean up orphan idx files (missing matching .pack)
+        for (const base of idxBases) {
+          if (!packBases.has(base)) {
+            await removeFileSafe(`${base}.idx`, "Removed orphan .idx file (missing .pack)");
+          }
+        }
+      } catch {
+        // pack folder not present
+      }
+
+      if (cleanedCount > 0) {
+        console.log(`GitOrbit: Repository repair cleaned ${cleanedCount} item(s):`, details);
+      }
+      return { repaired: cleanedCount > 0, cleanedCount, details };
+    } catch (err) {
+      console.warn("GitOrbit: Repository repair error:", err);
+      return { repaired: false, cleanedCount, details };
+    }
   }
 
   /** Returns true if .git exists and HEAD can be resolved */
@@ -300,8 +416,11 @@ export class GitSync {
   }
 
   /** Full sync cycle: stage -> commit -> fetch -> merge & checkout disk -> push */
-  async sync(changedFiles: string[]): Promise<SyncResult> {
+  async sync(changedFiles: string[], retryCount = 1): Promise<SyncResult> {
     const conflicts: ConflictFile[] = [];
+
+    // Pre-flight auto-heal: purge any 0-byte corrupt objects, stale locks, or partial packfiles
+    await this.repairGitRepository();
 
     try {
       // 1. Stage or remove changed files
@@ -365,6 +484,17 @@ export class GitSync {
       return { success: conflicts.length === 0, conflictFiles: conflicts };
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
+      const isBufferError =
+        msg.includes("Invalid compressed buffer") ||
+        msg.includes("buffer error") ||
+        msg.includes("DecompressionError");
+
+      if (isBufferError && retryCount > 0) {
+        console.warn("GitOrbit: Detected compressed buffer error. Performing repository repair and retrying sync...");
+        await this.repairGitRepository();
+        return await this.sync(changedFiles, retryCount - 1);
+      }
+
       return { success: false, conflictFiles: [], error: msg };
     }
   }
@@ -397,6 +527,7 @@ export class GitSync {
   /** Pull only on vault startup, with automatic disk checkout */
   async pull(): Promise<ConflictFile[]> {
     if (!(await this.hasLocalBranch())) return [];
+    await this.repairGitRepository();
 
     const fetchHead = await this.safeFetch();
     if (!fetchHead) return [];
