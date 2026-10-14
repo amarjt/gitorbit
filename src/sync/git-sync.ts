@@ -157,15 +157,17 @@ export class GitSync {
     return this.hasLocalBranch();
   }
 
-  /** Reconciles remote commit into local working tree */
-  private async reconcileRemote(remoteOid: string): Promise<void> {
+  /** Reconciles remote commit into local working tree, returning detected conflict files if any */
+  private async reconcileRemote(remoteOid: string): Promise<ConflictFile[]> {
     const localHead = await git.resolveRef({
       fs: this.fs,
       dir: this.dir,
       ref: DEFAULT_BRANCH,
     });
 
-    if (remoteOid !== localHead) {
+    if (remoteOid === localHead) return [];
+
+    try {
       await git.merge({
         fs: this.fs,
         dir: this.dir,
@@ -176,6 +178,7 @@ export class GitSync {
         fastForward: true,
         fastForwardOnly: false,
         allowUnrelatedHistories: true,
+        abortOnConflict: true,
       });
 
       // Write updated remote files to physical disk (Issue #4 fix)
@@ -185,6 +188,36 @@ export class GitSync {
         ref: DEFAULT_BRANCH,
         force: true,
       });
+      return [];
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Check if it's a MergeConflictError
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const isConflict =
+        (err as any)?.code === "MergeConflictError" ||
+        msg.includes("Automatic merge failed") ||
+        msg.includes("merge conflicts");
+
+      if (isConflict) {
+        console.warn("GitOrbit: Detected merge conflict during remote reconciliation:", msg);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let conflictPaths: string[] = (err as any)?.data?.filepaths ?? [];
+        if (conflictPaths.length === 0) {
+          const match = msg.match(/in the following files:\s*([^.]+)\./);
+          if (match && match[1]) {
+            conflictPaths = match[1].split(",").map((s) => s.trim());
+          }
+        }
+
+        const conflictFiles: ConflictFile[] = [];
+        for (const filepath of conflictPaths) {
+          const ours = await this.readFileContent(filepath);
+          const theirs = await this.readRemoteFileContent(filepath);
+          conflictFiles.push({ path: filepath, ours, theirs });
+        }
+        return conflictFiles;
+      }
+      throw err;
     }
   }
 
@@ -207,8 +240,12 @@ export class GitSync {
         console.log("GitOrbit: Push rejected (non-fast-forward). Re-fetching remote and reconciling...");
         const freshHead = await this.safeFetch();
         if (freshHead) {
-          await this.reconcileRemote(freshHead);
-          return await this.pushWithRecovery(retryCount - 1);
+          const conflicts = await this.reconcileRemote(freshHead);
+          if (conflicts.length === 0) {
+            return await this.pushWithRecovery(retryCount - 1);
+          } else {
+            throw new Error(`Automatic merge failed with conflicts in: ${conflicts.map((c) => c.path).join(", ")}`);
+          }
         }
       }
       throw err;
@@ -302,11 +339,14 @@ export class GitSync {
 
       // 4. Merge remote & Checkout working tree to disk
       if (fetchHead && (await this.hasLocalBranch())) {
-        await this.reconcileRemote(fetchHead);
+        const mergeConflicts = await this.reconcileRemote(fetchHead);
+        if (mergeConflicts.length > 0) {
+          conflicts.push(...mergeConflicts);
+        }
       }
 
       // 5. Detect conflicts
-      if (await this.hasLocalBranch()) {
+      if (conflicts.length === 0 && (await this.hasLocalBranch())) {
         const statusAfter = await git.statusMatrix({ fs: this.fs, dir: this.dir });
         for (const [filepath, head, workdir, stage] of statusAfter) {
           if (stage === 2 || stage === 3 || (head === 0 && workdir === 2 && stage === 0)) {
@@ -334,21 +374,34 @@ export class GitSync {
     const fullPath = `${this.dir}/${filepath}`;
     await this.fs.promises.writeFile(fullPath, resolvedContent);
     await git.add({ fs: this.fs, dir: this.dir, filepath });
+
+    let parents: string[] | undefined;
+    try {
+      const localHead = await git.resolveRef({ fs: this.fs, dir: this.dir, ref: DEFAULT_BRANCH });
+      parents =
+        this.latestRemoteHead && this.latestRemoteHead !== localHead
+          ? [localHead, this.latestRemoteHead]
+          : [localHead];
+    } catch {
+      parents = undefined;
+    }
+
     await git.commit({
       ...this.gitOpts(),
+      parent: parents,
       message: `sync: resolve conflict in ${filepath}`,
     });
     await this.pushWithRecovery();
   }
 
   /** Pull only on vault startup, with automatic disk checkout */
-  async pull(): Promise<void> {
-    if (!(await this.hasLocalBranch())) return;
+  async pull(): Promise<ConflictFile[]> {
+    if (!(await this.hasLocalBranch())) return [];
 
     const fetchHead = await this.safeFetch();
-    if (!fetchHead) return;
+    if (!fetchHead) return [];
 
-    await this.reconcileRemote(fetchHead);
+    return await this.reconcileRemote(fetchHead);
   }
 
   private async readFileContent(filepath: string): Promise<string> {

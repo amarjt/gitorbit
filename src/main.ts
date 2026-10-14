@@ -44,8 +44,13 @@ export default class GitOrbitPlugin extends Plugin {
       if (this.gitSync) {
         this.setStatus("pulling");
         try {
-          await this.gitSync.pull();
-          this.setStatus("idle");
+          const conflicts = await this.gitSync.pull();
+          if (conflicts && conflicts.length > 0) {
+            this.setStatus("conflict", `${conflicts.length} conflict(s)`);
+            this.showConflictModal(conflicts);
+          } else {
+            this.setStatus("idle");
+          }
         } catch {
           this.setStatus("error", "Pull failed on startup");
         }
@@ -159,7 +164,11 @@ export default class GitOrbitPlugin extends Plugin {
       }
     } else {
       try {
-        await sync.pull();
+        const conflicts = await sync.pull();
+        if (conflicts && conflicts.length > 0) {
+          this.setStatus("conflict", `${conflicts.length} conflict(s)`);
+          this.showConflictModal(conflicts);
+        }
       } catch (err) {
         console.warn("GitOrbit: Initial pull warning:", err);
       }
@@ -199,6 +208,10 @@ export default class GitOrbitPlugin extends Plugin {
           this.saveSettings();
         }
       },
+      (conflicts) => {
+        this.setStatus("conflict", `${conflicts.length} conflict(s)`);
+        this.showConflictModal(conflicts);
+      },
       syncIntervalMs
     );
   }
@@ -219,7 +232,7 @@ export default class GitOrbitPlugin extends Plugin {
       const result = await this.gitSync.sync(allFiles);
 
       if (result.conflictFiles.length > 0) {
-        this.setStatus("conflict");
+        this.setStatus("conflict", `${result.conflictFiles.length} conflict(s)`);
         this.showConflictModal(result.conflictFiles);
       } else if (result.success) {
         this.settings.lastSyncTime = Date.now();

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.3] - 2026-10-15
+
+### Fixed
+- **Merge Conflict Resolution Handling**: Gracefully catch `MergeConflictError` (e.g. `Automatic merge failed with one or more merge conflicts in the following files: Welcome.md`) and extract conflict files rather than aborting sync.
+- **Two-Parent Merge Commits**: Ensured `resolveConflict()` records a proper 2-parent merge commit (`[localHead, remoteHead]`), guaranteeing that GitHub recognizes resolved conflicts as valid fast-forward merges.
+- **Auto-Sync Conflict Trigger**: Connected `SyncQueue` to Obsidian UI so background sync conflicts automatically trigger the visual `ConflictModal`.
+
+### Added
+- **"Combine Both" Conflict Resolution**: Added a one-click "Combine Both" option in `ConflictModal` allowing users to concatenate local and remote notes without losing ideas from either device.
+- **Conflict Status Bar Feedback**: Updated status bar badge to indicate exact number of files in conflict (e.g. `⚠ Conflict: 1 file(s)`).
+
 ## [1.0.2] - 2026-10-15
 
 ### Fixed

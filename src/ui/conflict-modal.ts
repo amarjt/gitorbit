@@ -94,6 +94,12 @@ export class ConflictModal extends Modal {
           })
       )
       .addButton((btn) =>
+        btn.setButtonText("Combine Both").onClick(async () => {
+          const combined = `${conflict.ours.trim()}\n\n---\n*Merged from remote:*\n\n${conflict.theirs.trim()}\n`;
+          await this.resolve(conflict, combined);
+        })
+      )
+      .addButton((btn) =>
         btn.setButtonText("Open in Editor").onClick(() => {
           this.close();
           this.app.workspace.openLinkText(conflict.path, "", true);

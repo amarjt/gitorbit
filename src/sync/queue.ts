@@ -1,7 +1,8 @@
 import { GitSync } from "./git-sync";
-import { SyncResult, SyncStatus } from "../types";
+import { SyncResult, SyncStatus, ConflictFile } from "../types";
 
 type StatusCallback = (status: SyncStatus, detail?: string) => void;
+type ConflictCallback = (conflicts: ConflictFile[]) => void;
 
 export class SyncQueue {
   private pendingFiles = new Set<string>();
@@ -9,11 +10,18 @@ export class SyncQueue {
   private running = false;
   private gitSync: GitSync;
   private onStatus: StatusCallback;
+  private onConflict?: ConflictCallback;
   private debounceMs: number;
 
-  constructor(gitSync: GitSync, onStatus: StatusCallback, debounceMs: number = 3000) {
+  constructor(
+    gitSync: GitSync,
+    onStatus: StatusCallback,
+    onConflict?: ConflictCallback,
+    debounceMs: number = 3000
+  ) {
     this.gitSync = gitSync;
     this.onStatus = onStatus;
+    this.onConflict = onConflict;
     this.debounceMs = debounceMs;
   }
 
@@ -60,7 +68,10 @@ export class SyncQueue {
       const result = await this.gitSync.sync(filesToSync);
 
       if (result.conflictFiles.length > 0) {
-        this.onStatus("conflict");
+        this.onStatus("conflict", `${result.conflictFiles.length} file(s) in conflict`);
+        if (this.onConflict) {
+          this.onConflict(result.conflictFiles);
+        }
       } else if (result.success) {
         this.onStatus("idle");
       } else {
