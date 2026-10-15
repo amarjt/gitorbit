@@ -63,14 +63,15 @@ export class GitSync implements ISyncEngine {
     username: string,
     repoName: string,
     authorName: string = "GitOrbit",
-    authorEmail: string = "sync@gitorbit.local"
+    authorEmail: string = "sync@gitorbit.local",
+    remoteUrl?: string
   ) {
     this.adapter = adapter;
     this.fs = createFsAdapter(adapter, vaultPath);
     this.dir = vaultPath;
     this.token = token;
     this.username = username;
-    this.remoteUrl = `https://github.com/${username}/${repoName}.git`;
+    this.remoteUrl = remoteUrl?.trim() || `https://github.com/${username}/${repoName}.git`;
     this.authorName = authorName;
     this.authorEmail = authorEmail;
   }

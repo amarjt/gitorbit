@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-10-15
+
+### Added
+- **Repository Chooser & Custom Remote URL Support**:
+  - **Dynamic Account Repository Chooser**: Automatically queries GitHub's API (`fetchUserRepos`) upon PAT authentication to populate an interactive dropdown of existing account repositories.
+  - **Custom Clone URL Parsing & Live Hint**: Supports custom Git remote URLs (`https://`, `git@github.com:`, and shorthand `owner/repo`) with non-blocking, inline validation messages (`remoteUrlHint`).
+  - **Auto-Provisioning**: Retained "+ Create new private repository" option to automatically create and initialize private vault repositories with one click.
+- **Comprehensive Automatic Synchronization Suite**:
+  - **Auto-Sync on Vault Edits**: Configurable toggle and debounce slider (1,000ms – 10,000ms) to sync changes seamlessly as you type without spamming Git commits.
+  - **Sync on Startup**: Automatic pull and synchronization when Obsidian loads or the vault workspace is opened.
+  - **Periodic Background Sync**: Zero-leak background timer (`periodicSync`) with selectable intervals (2, 5, 10, 15, 30, 60 minutes) to keep mobile and desktop vaults synchronized continuously without manual interaction.
+- **Commit & Synchronization Customization**:
+  - **Dynamic Commit Message Templates**: Configurable commit message template supporting `{{datetime}}` and `{{date}}` variables.
+  - **Custom Author Identity**: Dedicated fields to configure Git author name and email.
+  - **Sync Engine Selector**: Toggle between `"auto"`, `"git"` (isomorphic-git), and `"api"` (GitHub Git Data API) directly from settings.
+
 ## [1.1.1] - 2026-10-15
 
 ### Added

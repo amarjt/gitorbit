@@ -18,10 +18,14 @@ export interface GitVaultSyncSettings {
   githubUsername: string;        // Authenticated GitHub username
   clientId: string;              // OAuth Client ID (user customizable or default)
   repoName: string;              // Remote repository name (e.g. "obsidian-my-vault")
+  remoteUrl: string;             // Remote clone URL (e.g. "https://github.com/owner/repo.git")
   branch: string;                // Remote branch (default "main")
   syncEngine: SyncEngineType;    // Sync engine: "auto" (git on desktop, api on mobile), "git", or "api"
-  autoSync: boolean;             // Automatically sync on vault file changes
+  autoSync: boolean;             // Automatically sync on vault file changes (edits)
   syncIntervalMs: number;        // Debounce window in milliseconds
+  syncOnStartup: boolean;        // Automatically pull/sync when Obsidian opens
+  periodicSync: boolean;         // Recurring background timer sync
+  periodicSyncMinutes: number;   // Interval in minutes for background sync
   excludePatterns: string[];     // Glob patterns to exclude
   lastSyncTime: number;          // Unix timestamp of last successful sync
   commitMessageTemplate: string; // Commit message template
@@ -36,10 +40,14 @@ export const DEFAULT_SETTINGS: GitVaultSyncSettings = {
   githubUsername: "",
   clientId: DEFAULT_CLIENT_ID,
   repoName: "",
+  remoteUrl: "",
   branch: "main",
   syncEngine: "auto",
   autoSync: true,
   syncIntervalMs: DEFAULT_SYNC_DEBOUNCE_MS,
+  syncOnStartup: true,
+  periodicSync: false,
+  periodicSyncMinutes: 10,
   excludePatterns: [
     ".obsidian/workspace",
     ".obsidian/workspace.json",

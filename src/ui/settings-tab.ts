@@ -1,11 +1,23 @@
 import { App, PluginSettingTab, Setting, Notice, ButtonComponent } from "obsidian";
 import type GitOrbitPlugin from "../main";
 import { requestDeviceCode, pollForToken } from "../auth/github-device";
-import { getAuthenticatedUser } from "../github/api";
+import {
+  getAuthenticatedUser,
+  fetchUserRepos,
+  parseGitHubRepo,
+  formatRemoteUrl,
+  remoteUrlHint,
+} from "../github/api";
 import { DEFAULT_CLIENT_ID } from "../constants";
+import { GitHubRepo } from "../types";
+
+const CREATE_NEW_REPO_VAL = "__gitorbit_new_repo__";
+const CUSTOM_REMOTE_VAL = "__gitorbit_custom_remote__";
 
 export class GitOrbitSettingsTab extends PluginSettingTab {
   plugin: GitOrbitPlugin;
+  private userRepos: GitHubRepo[] = [];
+  private reposFetched = false;
 
   constructor(app: App, plugin: GitOrbitPlugin) {
     super(app, plugin);
@@ -19,26 +31,127 @@ export class GitOrbitSettingsTab extends PluginSettingTab {
     containerEl.createEl("h2", { text: "GitOrbit Settings" });
     const settings = this.plugin.settings;
 
-    // ── Authentication Section ──────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "GitHub Connection" });
+    // ── Authentication & Connection Section ──────────────────────────────────
+    containerEl.createEl("h3", { text: "GitHub Connection & Repository" });
 
     if (settings.githubToken && settings.githubUsername) {
-      // Connected State
+      // Connected State Banner
       const card = containerEl.createDiv({ cls: "gitorbit-connected-card" });
       card.style.cssText =
         "background:var(--background-secondary);padding:14px;border-radius:8px;" +
         "border:1px solid var(--interactive-accent);margin-bottom:14px;";
 
       card.createEl("div", {
-        text: `Connected to GitHub as @${settings.githubUsername} (${settings.authType === "pat" ? "Personal Access Token" : "OAuth Device Flow"})`,
+        text: `Connected to GitHub as @${settings.githubUsername} (${
+          settings.authType === "pat" ? "Personal Access Token" : "OAuth Device Flow"
+        })`,
         cls: "setting-item-name",
       });
 
       card.createEl("div", {
-        text: `Target Repository: https://github.com/${settings.githubUsername}/${settings.repoName}`,
+        text: `Active Remote: ${settings.remoteUrl || formatRemoteUrl(settings.githubUsername, settings.repoName)}`,
         cls: "setting-item-description",
       });
 
+      // ── Repository Chooser Dropdown ──
+      const repoSetting = new Setting(containerEl)
+        .setName("GitHub Repository")
+        .setDesc("Select an existing GitHub repository from your account, create a new one, or enter a custom clone URL.")
+        .addDropdown((drop) => {
+          const currentFull = `${settings.githubUsername}/${settings.repoName}`;
+          if (settings.repoName) {
+            drop.addOption(currentFull, currentFull);
+          }
+
+          // Populate fetched repos
+          for (const r of this.userRepos) {
+            if (r.full_name && r.full_name !== currentFull) {
+              drop.addOption(r.full_name, `${r.full_name}${r.private ? " (private)" : ""}`);
+            }
+          }
+
+          drop.addOption(CREATE_NEW_REPO_VAL, "+ Create new private repository for this vault");
+          drop.addOption(CUSTOM_REMOTE_VAL, "✏️ Enter custom remote URL…");
+
+          drop.setValue(currentFull);
+          drop.onChange(async (val) => {
+            if (val === CREATE_NEW_REPO_VAL) {
+              await this.plugin.initializeRepo(settings.githubToken, settings.githubUsername);
+              this.display();
+            } else if (val === CUSTOM_REMOTE_VAL) {
+              this.display();
+            } else {
+              const parsed = parseGitHubRepo(val);
+              if (parsed) {
+                settings.githubUsername = parsed.owner;
+                settings.repoName = parsed.repo;
+                settings.remoteUrl = formatRemoteUrl(parsed.owner, parsed.repo);
+                await this.plugin.saveSettings();
+                await this.plugin.bootSyncEngine();
+                new Notice(`GitOrbit: Switched to repository ${val}`);
+                this.display();
+              }
+            }
+          });
+        })
+        .addExtraButton((btn) =>
+          btn
+            .setIcon("refresh-cw")
+            .setTooltip("Refresh repositories from GitHub")
+            .onClick(async () => {
+              btn.setDisabled(true);
+              new Notice("GitOrbit: Refreshing repositories from GitHub…");
+              await this.loadRepositories(true);
+            })
+        );
+
+      // Lazily trigger repository fetch if not yet loaded
+      if (!this.reposFetched) {
+        this.loadRepositories(false);
+      }
+
+      // ── Remote Clone URL Text Field ──
+      const remoteUrlSetting = new Setting(containerEl)
+        .setName("Remote URL")
+        .setDesc("HTTPS clone URL of the remote GitHub repository.")
+        .addText((text) =>
+          text
+            .setPlaceholder("https://github.com/owner/repository.git")
+            .setValue(settings.remoteUrl || formatRemoteUrl(settings.githubUsername, settings.repoName))
+            .onChange(async (val) => {
+              const trimmed = val.trim();
+              settings.remoteUrl = trimmed;
+
+              const parsed = parseGitHubRepo(trimmed);
+              if (parsed) {
+                settings.githubUsername = parsed.owner;
+                settings.repoName = parsed.repo;
+              }
+
+              updateRemoteHint();
+              await this.plugin.saveSettings();
+              await this.plugin.bootSyncEngine();
+            })
+        );
+
+      // Non-blocking real-time validation hint
+      const hintDiv = remoteUrlSetting.descEl.createDiv();
+      hintDiv.style.cssText = "font-size:11px;margin-top:4px;";
+      const updateRemoteHint = () => {
+        const hint = remoteUrlHint(settings.remoteUrl);
+        if (hint) {
+          hintDiv.textContent = `⚠️ ${hint}`;
+          hintDiv.style.color = "var(--text-warning)";
+        } else if (settings.remoteUrl) {
+          hintDiv.textContent = `✓ Valid remote: ${settings.githubUsername}/${settings.repoName}`;
+          hintDiv.style.color = "var(--text-success)";
+        } else {
+          hintDiv.textContent = "";
+        }
+      };
+      updateRemoteHint();
+
+      // Disconnect Button
       new Setting(containerEl)
         .setName("Disconnect account")
         .setDesc("Unlink this device from the remote GitHub repository.")
@@ -50,6 +163,7 @@ export class GitOrbitSettingsTab extends PluginSettingTab {
               settings.githubToken = "";
               settings.githubUsername = "";
               settings.repoName = "";
+              settings.remoteUrl = "";
               await this.plugin.saveSettings();
               this.display();
               new Notice("GitOrbit: Disconnected from GitHub.");
@@ -142,8 +256,84 @@ export class GitOrbitSettingsTab extends PluginSettingTab {
       }
     }
 
-    // ── Sync Options ────────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Sync Options" });
+    // ── Automatic Synchronization Options ────────────────────────────────────
+    containerEl.createEl("h3", { text: "Automatic Synchronization Options" });
+
+    // 1. Sync on Edit (autoSync)
+    new Setting(containerEl)
+      .setName("Sync on file edits")
+      .setDesc("Automatically commit and push changes after editing vault notes.")
+      .addToggle((toggle) =>
+        toggle.setValue(settings.autoSync).onChange(async (val) => {
+          settings.autoSync = val;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    // 2. Debounce window
+    new Setting(containerEl)
+      .setName("Sync debounce (ms)")
+      .setDesc("Wait time in milliseconds after the last file edit before initiating background commit & push.")
+      .addSlider((slider) =>
+        slider
+          .setLimits(1000, 10000, 500)
+          .setValue(settings.syncIntervalMs)
+          .setDynamicTooltip()
+          .onChange(async (val) => {
+            settings.syncIntervalMs = val;
+            await this.plugin.saveSettings();
+            await this.plugin.bootSyncEngine();
+          })
+      );
+
+    // 3. Sync on Startup (syncOnStartup)
+    new Setting(containerEl)
+      .setName("Sync on startup")
+      .setDesc("Automatically pull and merge the latest changes from GitHub when Obsidian opens.")
+      .addToggle((toggle) =>
+        toggle.setValue(settings.syncOnStartup).onChange(async (val) => {
+          settings.syncOnStartup = val;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    // 4. Periodic Background Sync (periodicSync)
+    new Setting(containerEl)
+      .setName("Periodic background sync")
+      .setDesc("Periodically check for remote updates and push local notes in the background on a recurring timer.")
+      .addToggle((toggle) =>
+        toggle.setValue(settings.periodicSync).onChange(async (val) => {
+          settings.periodicSync = val;
+          await this.plugin.saveSettings();
+          this.plugin.restartPeriodicSync();
+          this.display();
+        })
+      );
+
+    // 5. Periodic Interval (Only visible if periodicSync is enabled)
+    if (settings.periodicSync) {
+      new Setting(containerEl)
+        .setName("Periodic sync interval")
+        .setDesc("Interval between automated background sync checks.")
+        .addDropdown((drop) =>
+          drop
+            .addOption("2", "Every 2 minutes")
+            .addOption("5", "Every 5 minutes")
+            .addOption("10", "Every 10 minutes")
+            .addOption("15", "Every 15 minutes")
+            .addOption("30", "Every 30 minutes")
+            .addOption("60", "Every 60 minutes")
+            .setValue(String(settings.periodicSyncMinutes || 10))
+            .onChange(async (val) => {
+              settings.periodicSyncMinutes = parseInt(val, 10) || 10;
+              await this.plugin.saveSettings();
+              this.plugin.restartPeriodicSync();
+            })
+        );
+    }
+
+    // ── Sync Engine & Git Branch ─────────────────────────────────────────────
+    containerEl.createEl("h3", { text: "Sync Engine & Branch" });
 
     const currentEngine = this.plugin.effectiveEngine();
     new Setting(containerEl)
@@ -153,7 +343,7 @@ export class GitOrbitSettingsTab extends PluginSettingTab {
           currentEngine === "api"
             ? "GitHub Git Data API (Mobile Optimized, zero-packfile, immune to buffer decompression errors)"
             : "Git Engine (isomorphic-git, full local git history)"
-        }. Auto automatically selects Git on Desktop and GitHub API on Mobile.`
+        }. Auto selects Git on Desktop and GitHub API on Mobile.`
       )
       .addDropdown((drop) =>
         drop
@@ -182,47 +372,21 @@ export class GitOrbitSettingsTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Automatic synchronization")
-      .setDesc("Automatically commit and push changes after editing vault notes.")
-      .addToggle((toggle) =>
-        toggle.setValue(settings.autoSync).onChange(async (val) => {
-          settings.autoSync = val;
-          await this.plugin.saveSettings();
-        })
-      );
+    // ── Commit Customization ─────────────────────────────────────────────────
+    containerEl.createEl("h3", { text: "Git Commit Identity & Message" });
 
     new Setting(containerEl)
-      .setName("Sync debounce (ms)")
-      .setDesc("Wait time in milliseconds after last file change before pushing.")
-      .addSlider((slider) =>
-        slider
-          .setLimits(1000, 10000, 500)
-          .setValue(settings.syncIntervalMs)
-          .setDynamicTooltip()
+      .setName("Commit message template")
+      .setDesc("Template for automated sync commits. Supports {{datetime}} (full ISO timestamp) and {{date}} (YYYY-MM-DD).")
+      .addText((text) =>
+        text
+          .setPlaceholder("sync: {{datetime}}")
+          .setValue(settings.commitMessageTemplate || "sync: {{datetime}}")
           .onChange(async (val) => {
-            settings.syncIntervalMs = val;
+            settings.commitMessageTemplate = val.trim() || "sync: {{datetime}}";
             await this.plugin.saveSettings();
           })
       );
-
-    new Setting(containerEl)
-      .setName("Excluded patterns")
-      .setDesc("One glob pattern per line. Files matching these patterns will never be synced.")
-      .addTextArea((ta) =>
-        ta
-          .setValue(settings.excludePatterns.join("\n"))
-          .onChange(async (val) => {
-            settings.excludePatterns = val
-              .split("\n")
-              .map((s) => s.trim())
-              .filter(Boolean);
-            await this.plugin.saveSettings();
-          })
-      );
-
-    // ── Commit Identity ─────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Git Commit Identity" });
 
     new Setting(containerEl)
       .setName("Author Name")
@@ -248,29 +412,48 @@ export class GitOrbitSettingsTab extends PluginSettingTab {
           })
       );
 
+    // ── Excluded Files ───────────────────────────────────────────────────────
+    containerEl.createEl("h3", { text: "Excluded Paths & Globs" });
+
+    new Setting(containerEl)
+      .setName("Excluded patterns")
+      .setDesc("One glob pattern per line. Matching files will be completely excluded from git sync.")
+      .addTextArea((ta) =>
+        ta
+          .setValue(settings.excludePatterns.join("\n"))
+          .onChange(async (val) => {
+            settings.excludePatterns = val
+              .split("\n")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            await this.plugin.saveSettings();
+          })
+      );
+
     // ── Manual Operations ───────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "Manual Sync" });
+    containerEl.createEl("h3", { text: "Manual Maintenance" });
 
     new Setting(containerEl)
       .setName("Sync now")
       .setDesc("Pull remote updates and push all pending local changes immediately.")
       .addButton((btn) =>
         btn.setButtonText("Sync Now").onClick(async () => {
-          await this.plugin.triggerManualSync();
+          btn.setButtonText("Syncing…").setDisabled(true);
+          await this.plugin.triggerManualSync(false);
+          btn.setButtonText("Sync Now").setDisabled(false);
         })
       );
 
     new Setting(containerEl)
-      .setName("Repair & clean local repository")
-      .setDesc("Scans for and purges corrupted 0-byte objects, orphan pack indexes, and stale lock files caused by crashes or aborted operations.")
+      .setName("Repair & clean repository")
+      .setDesc("Scans for and purges corrupted 0-byte objects, orphan pack indexes, and resets baseline snapshots.")
       .addButton((btn) =>
         btn.setButtonText("Repair Repository").onClick(async () => {
-          btn.setButtonText("Repairing...").setDisabled(true);
+          btn.setButtonText("Repairing…").setDisabled(true);
           await this.plugin.repairRepository();
           btn.setButtonText("Repair Repository").setDisabled(false);
         })
       );
-
 
     if (settings.lastSyncTime > 0) {
       const lastSync = new Date(settings.lastSyncTime).toLocaleString();
@@ -278,6 +461,25 @@ export class GitOrbitSettingsTab extends PluginSettingTab {
         text: `Last synced: ${lastSync}`,
         cls: "setting-item-description",
       });
+    }
+  }
+
+  private async loadRepositories(forceNotice = false): Promise<void> {
+    const token = this.plugin.settings.githubToken;
+    if (!token) return;
+
+    try {
+      this.userRepos = await fetchUserRepos(token);
+      this.reposFetched = true;
+      if (forceNotice) {
+        new Notice(`GitOrbit: Loaded ${this.userRepos.length} repository option(s).`);
+      }
+      this.display();
+    } catch (err) {
+      console.warn("GitOrbit: Failed to fetch repos:", err);
+      if (forceNotice) {
+        new Notice("GitOrbit: Could not fetch repositories from GitHub.");
+      }
     }
   }
 
