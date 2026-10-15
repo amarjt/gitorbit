@@ -1,0 +1,53 @@
+/* GitOrbit - Responsive UI & Conflict Resolver Styles */
+
+.gitorbit-conflict-modal {
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.gitorbit-conflict-header {
+  padding-bottom: 8px;
+}
+
+.gitorbit-conflict-title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.gitorbit-conflict-tabs button:hover {
+  filter: brightness(1.1);
+}
+
+.gitorbit-merge-editor {
+  border-radius: 6px;
+  font-family: var(--font-monospace);
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.gitorbit-merge-editor:focus {
+  border-color: var(--interactive-accent) !important;
+  box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+/* Mobile Responsive Adjustments */
+@media screen and (max-width: 650px) {
+  .gitorbit-conflict-columns {
+    grid-template-columns: 1fr !important;
+  }
+
+  .gitorbit-conflict-actions {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  .gitorbit-conflict-actions button {
+    width: 100%;
+    font-size: 0.85rem;
+  }
+
+  .gitorbit-conflict-tabs button {
+    padding: 6px 8px;
+    font-size: 0.78rem;
+  }
+}

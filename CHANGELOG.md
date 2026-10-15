@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.1] - 2026-10-15
+
+### Added
+- **Mobile-Responsive Conflict Resolution UI**:
+  - **Adaptive Segmented Tabs**: Replaced cramped side-by-side columns on mobile with a full-width segmented view switcher (`✨ Merged`, `📱 Local`, `☁️ Remote`, `🔍 Differences`, and `↔️ Side-by-Side` on desktop).
+  - **In-Modal Merge Editor**: An interactive `<textarea>` displaying the merged note, allowing users to inspect or make quick touch edits right inside the modal on mobile before resolving.
+  - **Responsive Button Grid**: Converted squashed horizontal button groups into an auto-wrapping button grid (`repeat(auto-fit, minmax(130px, 1fr))`) with comfortable touch targets.
+  - **Dedicated Mobile Stylesheet (`styles.css`)**: Media queries (`@media screen and (max-width: 650px)`) ensuring seamless padding, typography, and button flow on phones and tablets.
+- **Smart "Merge Extra Content" Engine (No Whole-Document Duplication)**:
+  - Replaced naive concatenation (`ours + separator + theirs`) with an intelligent LCS line-alignment algorithm.
+  - Automatically identifies common prefixes and suffixes, diffs the changed middle slice, and extracts **only the new/extra lines** from the remote version without repeating identical headers or existing text.
+  - Dynamic button label showing exact line count: `Merge Extra (+N)` for total transparency.
+
 ## [1.1.0] - 2026-10-15
 
 ### Added
