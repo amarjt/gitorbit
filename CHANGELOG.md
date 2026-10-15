@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-10-15
+
+### Added
+- **Dual Sync Engine Architecture (ObsSync Pattern)**:
+  - **Mobile**: Introduced the dedicated **GitHub Git Data API Engine** (`GitHubApiSync`) that performs sync directly against GitHub's REST endpoints (`blobs` → `trees` → `commits` → `refs`).
+  - **Desktop**: Preserved full local history and multi-parent merge capabilities using the **Git Engine** (`isomorphic-git`).
+  - **Auto Engine Selection**: Added `syncEngine: "auto" | "git" | "api"` setting (defaults to `"auto"` which seamlessly activates Git on Desktop and GitHub API on Mobile).
+- **Zero-Packfile Mobile Synchronization**: Mobile sync bypasses `.git/` packfile decompression entirely, eliminating `invalid compressed buffer: buffer error` (`Z_BUF_ERROR`) and out-of-memory crashes on Android WebView and iOS.
+- **Micro-Memory Blob Streaming**:
+  - Downloads blobs via `application/vnd.github.raw` directly into binary `Uint8Array`, avoiding intermediate base64 string allocations.
+  - Chunked base64 uploads (49,152-byte chunks) to prevent Android V8 call stack exhaustion.
+  - Automatic `yieldToGc()` macrotask breaks every 25 files to allow the V8 garbage collector to free ArrayBuffers.
+- **Smart Mobile Exclusions**: Automatically excludes `.obsidian/` configuration bloat on mobile to prevent memory exhaustion and API rate-limit spikes while syncing all notes and attachments.
+- **Live Vault Proxy (`createSyncAdapter`)**: Live note updates route through `vault.modify()` / `vault.delete()`, ensuring open notes and metadata caches instantly reflect remote changes without vault reloads.
+- **Interactive API Conflict Resolution**: Full side-by-side conflict detection and resolution with direct GitHub commit generation on current remote head.
+- **Configurable Git Branch**: Added setting to specify custom target branch (defaulting to `"main"`).
+
 ## [1.0.4] - 2026-10-15
 
 ### Fixed

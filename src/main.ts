@@ -1,16 +1,17 @@
-import { Plugin, Notice, TFile, TAbstractFile } from "obsidian";
-import { GitVaultSyncSettings, DEFAULT_SETTINGS, SyncStatus, ConflictFile } from "./types";
+import { Plugin, Notice, TFile, TAbstractFile, Platform } from "obsidian";
+import { GitVaultSyncSettings, DEFAULT_SETTINGS, SyncStatus, ConflictFile, ISyncEngine } from "./types";
 import { GitOrbitSettingsTab } from "./ui/settings-tab";
 import { StatusBarItem } from "./ui/status-bar";
 import { ConflictModal } from "./ui/conflict-modal";
 import { GitSync } from "./sync/git-sync";
+import { GitHubApiSync } from "./sync/github-api-sync";
 import { SyncQueue } from "./sync/queue";
 import { repoExists, createRepo, vaultNameToRepoName } from "./github/api";
 
 export default class GitOrbitPlugin extends Plugin {
   settings!: GitVaultSyncSettings;
   private statusBar!: StatusBarItem;
-  private gitSync: GitSync | null = null;
+  private engine: ISyncEngine | null = null;
   private syncQueue: SyncQueue | null = null;
 
   async onload(): Promise<void> {
@@ -32,7 +33,7 @@ export default class GitOrbitPlugin extends Plugin {
 
     this.addCommand({
       id: "gitorbit-repair",
-      name: "Repair and clean local git repository",
+      name: "Repair and clean repository",
       callback: () => this.repairRepository(),
     });
 
@@ -47,10 +48,10 @@ export default class GitOrbitPlugin extends Plugin {
 
     // 5. Pull on workspace ready
     this.app.workspace.onLayoutReady(async () => {
-      if (this.gitSync) {
+      if (this.engine) {
         this.setStatus("pulling");
         try {
-          const conflicts = await this.gitSync.pull();
+          const conflicts = await this.engine.pull();
           if (conflicts && conflicts.length > 0) {
             this.setStatus("conflict", `${conflicts.length} conflict(s)`);
             this.showConflictModal(conflicts);
@@ -108,7 +109,7 @@ export default class GitOrbitPlugin extends Plugin {
     if (this.statusBar) {
       this.statusBar.destroy();
     }
-    this.gitSync = null;
+    this.engine = null;
   }
 
   async loadSettings(): Promise<void> {
@@ -124,6 +125,17 @@ export default class GitOrbitPlugin extends Plugin {
   }
 
   /**
+   * Evaluates the effective engine:
+   * "auto" defaults to "api" (GitHub Git Data API) on mobile and "git" (isomorphic-git) on desktop.
+   */
+  effectiveEngine(): "git" | "api" {
+    if (this.settings.syncEngine === "auto") {
+      return Platform.isMobile ? "api" : "git";
+    }
+    return this.settings.syncEngine;
+  }
+
+  /**
    * Initializes or links the remote GitHub repository for this vault.
    */
   async initializeRepo(token: string, username: string): Promise<void> {
@@ -133,22 +145,11 @@ export default class GitOrbitPlugin extends Plugin {
     const repoName = vaultNameToRepoName(vaultName);
     this.settings.repoName = repoName;
 
-    const adapter = this.app.vault.adapter;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vaultPath: string = (adapter as any).basePath ?? "";
-
-    const sync = new GitSync(
-      adapter,
-      vaultPath,
-      token,
-      username,
-      repoName,
-      this.settings.authorName,
-      this.settings.authorEmail
-    );
-
     const exists = await repoExists(token, username, repoName);
-    const alreadyInit = await sync.isInitialized();
+    if (!exists) {
+      await createRepo(token, repoName, `Obsidian Vault: ${vaultName}`);
+      new Notice(`GitOrbit: Created private repo ${username}/${repoName}`);
+    }
 
     const allFiles = () =>
       this.app.vault
@@ -156,29 +157,73 @@ export default class GitOrbitPlugin extends Plugin {
         .map((f) => f.path)
         .filter((p) => !this.isExcluded(p));
 
-    if (!exists) {
-      await createRepo(token, repoName, `Obsidian Vault: ${vaultName}`);
-      await sync.initAndPush(allFiles());
-      new Notice(`GitOrbit: Created private repo ${username}/${repoName}`);
-    } else if (!alreadyInit) {
-      const cloneHadCommits = await sync.clone();
-      if (!cloneHadCommits) {
-        await sync.initAndPush(allFiles());
-        new Notice(`GitOrbit: Initialized repo ${username}/${repoName}`);
+    if (this.effectiveEngine() === "api") {
+      const apiEngine = new GitHubApiSync(
+        this.app.vault,
+        token,
+        username,
+        repoName,
+        this.settings.branch || "main",
+        () => this.settings,
+        () => this.saveSettings(),
+        (msg) => this.setStatus("pushing", msg)
+      );
+      this.engine = apiEngine;
+
+      const isInit = await apiEngine.isInitialized();
+      if (!isInit) {
+        await apiEngine.initAndPush(allFiles());
+        new Notice(`GitOrbit: Initialized repo ${username}/${repoName} via GitHub API.`);
       } else {
-        new Notice(`GitOrbit: Cloned repo ${username}/${repoName}`);
-      }
-    } else {
-      try {
-        const conflicts = await sync.pull();
+        const conflicts = await apiEngine.pull();
         if (conflicts && conflicts.length > 0) {
           this.setStatus("conflict", `${conflicts.length} conflict(s)`);
           this.showConflictModal(conflicts);
         }
-      } catch (err) {
-        console.warn("GitOrbit: Initial pull warning:", err);
+        new Notice(`GitOrbit: Linked & synced with ${username}/${repoName}`);
       }
-      new Notice(`GitOrbit: Linked & synced with ${username}/${repoName}`);
+    } else {
+      const adapter = this.app.vault.adapter;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const vaultPath: string = (adapter as any).basePath ?? "";
+
+      const sync = new GitSync(
+        adapter,
+        vaultPath,
+        token,
+        username,
+        repoName,
+        this.settings.authorName,
+        this.settings.authorEmail
+      );
+      this.engine = sync;
+
+      const alreadyInit = await sync.isInitialized();
+      if (!exists || !alreadyInit) {
+        if (exists) {
+          const cloneHadCommits = await sync.clone();
+          if (!cloneHadCommits) {
+            await sync.initAndPush(allFiles());
+            new Notice(`GitOrbit: Initialized repo ${username}/${repoName}`);
+          } else {
+            new Notice(`GitOrbit: Cloned repo ${username}/${repoName}`);
+          }
+        } else {
+          await sync.initAndPush(allFiles());
+          new Notice(`GitOrbit: Initialized repo ${username}/${repoName}`);
+        }
+      } else {
+        try {
+          const conflicts = await sync.pull();
+          if (conflicts && conflicts.length > 0) {
+            this.setStatus("conflict", `${conflicts.length} conflict(s)`);
+            this.showConflictModal(conflicts);
+          }
+        } catch (err) {
+          console.warn("GitOrbit: Initial pull warning:", err);
+        }
+        new Notice(`GitOrbit: Linked & synced with ${username}/${repoName}`);
+      }
     }
 
     this.settings.lastSyncTime = Date.now();
@@ -188,42 +233,64 @@ export default class GitOrbitPlugin extends Plugin {
   }
 
   async bootSyncEngine(): Promise<void> {
-    const { githubToken, githubUsername, repoName, authorName, authorEmail, syncIntervalMs } = this.settings;
+    const { githubToken, githubUsername, repoName, branch, authorName, authorEmail, syncIntervalMs } = this.settings;
     if (!githubToken || !githubUsername || !repoName) return;
 
-    const adapter = this.app.vault.adapter;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vaultPath: string = (adapter as any).basePath ?? "";
+    const targetBranch = branch || "main";
 
-    this.gitSync = new GitSync(
-      adapter,
-      vaultPath,
-      githubToken,
-      githubUsername,
-      repoName,
-      authorName,
-      authorEmail
-    );
+    if (this.effectiveEngine() === "api") {
+      this.engine = new GitHubApiSync(
+        this.app.vault,
+        githubToken,
+        githubUsername,
+        repoName,
+        targetBranch,
+        () => this.settings,
+        () => this.saveSettings(),
+        (msg) => this.setStatus("pushing", msg)
+      );
+    } else {
+      const adapter = this.app.vault.adapter;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const vaultPath: string = (adapter as any).basePath ?? "";
 
-    this.syncQueue = new SyncQueue(
-      this.gitSync,
-      (status, detail) => {
-        this.setStatus(status, detail);
-        if (status === "idle") {
-          this.settings.lastSyncTime = Date.now();
-          this.saveSettings();
-        }
-      },
-      (conflicts) => {
-        this.setStatus("conflict", `${conflicts.length} conflict(s)`);
-        this.showConflictModal(conflicts);
-      },
-      syncIntervalMs
-    );
+      this.engine = new GitSync(
+        adapter,
+        vaultPath,
+        githubToken,
+        githubUsername,
+        repoName,
+        authorName,
+        authorEmail
+      );
+    }
+
+    const engine = this.engine;
+    if (!engine) return;
+
+    if (this.syncQueue) {
+      this.syncQueue.setEngine(engine);
+    } else {
+      this.syncQueue = new SyncQueue(
+        engine,
+        (status, detail) => {
+          this.setStatus(status, detail);
+          if (status === "idle") {
+            this.settings.lastSyncTime = Date.now();
+            this.saveSettings();
+          }
+        },
+        (conflicts) => {
+          this.setStatus("conflict", `${conflicts.length} conflict(s)`);
+          this.showConflictModal(conflicts);
+        },
+        syncIntervalMs
+      );
+    }
   }
 
   async triggerManualSync(): Promise<void> {
-    if (!this.gitSync) {
+    if (!this.engine) {
       new Notice("GitOrbit: Not connected. Please connect your GitHub account in settings.");
       return;
     }
@@ -235,7 +302,7 @@ export default class GitOrbitPlugin extends Plugin {
         .map((f) => f.path)
         .filter((p) => !this.isExcluded(p));
 
-      const result = await this.gitSync.sync(allFiles);
+      const result = await this.engine.sync(allFiles);
 
       if (result.conflictFiles.length > 0) {
         this.setStatus("conflict", `${result.conflictFiles.length} conflict(s)`);
@@ -257,15 +324,17 @@ export default class GitOrbitPlugin extends Plugin {
   }
 
   async repairRepository(): Promise<void> {
-    if (!this.gitSync) {
+    if (!this.engine) {
       new Notice("GitOrbit: Not connected. Please connect in GitOrbit settings first.");
       return;
     }
     this.setStatus("connecting", "Repairing...");
-    const result = await this.gitSync.repairGitRepository();
+    const result = this.engine.repairGitRepository
+      ? await this.engine.repairGitRepository()
+      : { cleanedCount: 0, errors: [] };
     this.setStatus("idle");
     if (result.cleanedCount > 0) {
-      new Notice(`GitOrbit: Repaired repository. Cleaned ${result.cleanedCount} corrupted/stale item(s).`);
+      new Notice(`GitOrbit: Repaired repository. Cleaned ${result.cleanedCount} item(s).`);
     } else {
       new Notice("GitOrbit: Repository check passed. Zero corrupted objects found.");
     }
@@ -276,7 +345,7 @@ export default class GitOrbitPlugin extends Plugin {
       this.app,
       conflicts,
       async (filepath, resolved) => {
-        await this.gitSync!.resolveConflict(filepath, resolved);
+        await this.engine!.resolveConflict(filepath, resolved);
         this.settings.lastSyncTime = Date.now();
         await this.saveSettings();
         this.setStatus("idle");

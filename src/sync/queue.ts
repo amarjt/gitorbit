@@ -1,5 +1,4 @@
-import { GitSync } from "./git-sync";
-import { SyncResult, SyncStatus, ConflictFile } from "../types";
+import { ISyncEngine, SyncResult, SyncStatus, ConflictFile } from "../types";
 
 type StatusCallback = (status: SyncStatus, detail?: string) => void;
 type ConflictCallback = (conflicts: ConflictFile[]) => void;
@@ -8,21 +7,25 @@ export class SyncQueue {
   private pendingFiles = new Set<string>();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
-  private gitSync: GitSync;
+  private engine: ISyncEngine;
   private onStatus: StatusCallback;
   private onConflict?: ConflictCallback;
   private debounceMs: number;
 
   constructor(
-    gitSync: GitSync,
+    engine: ISyncEngine,
     onStatus: StatusCallback,
     onConflict?: ConflictCallback,
     debounceMs: number = 3000
   ) {
-    this.gitSync = gitSync;
+    this.engine = engine;
     this.onStatus = onStatus;
     this.onConflict = onConflict;
     this.debounceMs = debounceMs;
+  }
+
+  setEngine(engine: ISyncEngine): void {
+    this.engine = engine;
   }
 
   setDebounceMs(ms: number): void {
@@ -65,7 +68,7 @@ export class SyncQueue {
 
     try {
       this.onStatus("pushing");
-      const result = await this.gitSync.sync(filesToSync);
+      const result = await this.engine.sync(filesToSync);
 
       if (result.conflictFiles.length > 0) {
         this.onStatus("conflict", `${result.conflictFiles.length} file(s) in conflict`);

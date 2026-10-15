@@ -2,7 +2,7 @@ import * as git from "isomorphic-git";
 import { requestUrl, DataAdapter } from "obsidian";
 import { createFsAdapter } from "./fs-adapter";
 import { DEFAULT_BRANCH } from "../constants";
-import { ConflictFile, SyncResult } from "../types";
+import { ConflictFile, SyncResult, ISyncEngine } from "../types";
 
 // Custom HTTP transport wrapping Obsidian's native requestUrl (works on desktop & mobile, bypasses CORS)
 const gitHttp: git.HttpClient = {
@@ -45,7 +45,7 @@ const gitHttp: git.HttpClient = {
   },
 };
 
-export class GitSync {
+export class GitSync implements ISyncEngine {
   private adapter: DataAdapter;
   private fs: ReturnType<typeof createFsAdapter>;
   private dir: string;

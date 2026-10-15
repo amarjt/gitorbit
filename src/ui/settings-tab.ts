@@ -145,6 +145,43 @@ export class GitOrbitSettingsTab extends PluginSettingTab {
     // ── Sync Options ────────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Sync Options" });
 
+    const currentEngine = this.plugin.effectiveEngine();
+    new Setting(containerEl)
+      .setName("Sync Engine")
+      .setDesc(
+        `Active: ${
+          currentEngine === "api"
+            ? "GitHub Git Data API (Mobile Optimized, zero-packfile, immune to buffer decompression errors)"
+            : "Git Engine (isomorphic-git, full local git history)"
+        }. Auto automatically selects Git on Desktop and GitHub API on Mobile.`
+      )
+      .addDropdown((drop) =>
+        drop
+          .addOption("auto", "Auto (Desktop: Git, Mobile: GitHub API)")
+          .addOption("git", "Git Engine (isomorphic-git)")
+          .addOption("api", "GitHub API Engine (Git Data API)")
+          .setValue(settings.syncEngine)
+          .onChange(async (val) => {
+            settings.syncEngine = val as "auto" | "git" | "api";
+            await this.plugin.saveSettings();
+            await this.plugin.bootSyncEngine();
+            this.display();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Git Branch")
+      .setDesc("Remote target branch for synchronizing commits.")
+      .addText((text) =>
+        text
+          .setPlaceholder("main")
+          .setValue(settings.branch || "main")
+          .onChange(async (val) => {
+            settings.branch = val.trim() || "main";
+            await this.plugin.saveSettings();
+          })
+      );
+
     new Setting(containerEl)
       .setName("Automatic synchronization")
       .setDesc("Automatically commit and push changes after editing vault notes.")
