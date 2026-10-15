@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.1] - 2026-10-15
+
+### Added
+- **ObsSync Settings UI Alignment & Architectural Enhancements**:
+  - **Scroll Position Preservation**: Nearest scroll ancestor tracking prevents jarring viewport jumps on option toggles, dropdown selections, or remote branch refreshes.
+  - **Top-Level "Sync Now" CTA Banner**: When a repository and token are configured, a primary "Sync Now" CTA button is rendered directly at the top of the settings page for immediate synchronization without scrolling.
+  - **Single-Row PAT Authorization**: Re-architected PAT authentication into a unified row with an inline `.setCta()` "Authorize" button that dynamically enables on input and automatically resolves account details, default author name/email, and repositories.
+  - **Live Branch Management & Creation**: Added a branch dropdown with a `refresh-cw` button and "+ Create new branch…" option with real-time Git ref syntax validation and direct remote branch creation via the GitHub API.
+  - **Stacked Full-Width Exclusions & Hints**: Applied `.gitorbit-setting-stacked` and monospace styling to the excluded patterns textarea, with contextual hints explaining mobile exclusion behavior.
+  - **Scoped Mobile & Tablet Layout Fix**: Implemented responsive column layout rules (`.gitorbit-settings`) to prevent split-view flex stretching and card inflation on Android tablets and iPads.
+
 ## [1.2.0] - 2026-10-15
 
 ### Added

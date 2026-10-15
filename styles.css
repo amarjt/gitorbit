@@ -51,3 +51,76 @@
     font-size: 0.78rem;
   }
 }
+
+/* ── GitOrbit Settings Tab Styles (ObsSync Pattern) ── */
+
+.gitorbit-hidden {
+  display: none !important;
+}
+
+/* Stack setting controls full-width below their label (e.g. textarea) */
+.gitorbit-setting-stacked {
+  display: block !important;
+}
+
+.gitorbit-setting-stacked .setting-item-info {
+  margin-bottom: 8px;
+}
+
+.gitorbit-setting-stacked .setting-item-control {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.gitorbit-exclude-textarea {
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
+
+.gitorbit-setting-hint {
+  margin: 4px 0 12px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+}
+
+.gitorbit-setting-error {
+  margin-top: 4px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-error);
+}
+
+/* Token field + inline Authorize button sharing one settings row */
+.gitorbit-token-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 600px) {
+  .gitorbit-token-input {
+    min-width: 6em;
+  }
+
+  .gitorbit-exclude-textarea {
+    min-height: 120px;
+  }
+}
+
+/* Tablet & Mobile Settings Layout Fix */
+body.is-mobile .gitorbit-settings .setting-item {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+body.is-mobile .gitorbit-settings .setting-item-info {
+  margin-bottom: 8px;
+}
+
+body.is-mobile .gitorbit-settings .setting-item-control {
+  width: 100%;
+  justify-content: flex-start;
+}
+

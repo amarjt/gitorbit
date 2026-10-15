@@ -152,3 +152,76 @@ export function remoteUrlHint(url: string): string | null {
   }
   return null;
 }
+
+/**
+ * Fetch remote branches for a repository using GitHub API
+ */
+export async function fetchRemoteBranches(
+  token: string,
+  owner: string,
+  repo: string
+): Promise<string[]> {
+  try {
+    const branches = await ghFetch<Array<{ name: string }>>(
+      `/repos/${owner}/${repo}/branches?per_page=100`,
+      token
+    );
+    if (!Array.isArray(branches)) return [];
+    return branches.map((b) => b.name);
+  } catch (err) {
+    console.warn("GitOrbit: Failed to list remote branches:", err);
+    return [];
+  }
+}
+
+/**
+ * Create a new branch on GitHub off a base branch
+ */
+export async function createRemoteBranch(
+  token: string,
+  owner: string,
+  repo: string,
+  newBranch: string,
+  baseBranch: string
+): Promise<void> {
+  const baseData = await ghFetch<{ commit: { sha: string } }>(
+    `/repos/${owner}/${repo}/branches/${encodeURIComponent(baseBranch)}`,
+    token
+  );
+  const baseSha = baseData?.commit?.sha;
+  if (!baseSha) {
+    throw new Error(`Base branch '${baseBranch}' commit SHA could not be resolved.`);
+  }
+
+  await ghFetch(
+    `/repos/${owner}/${repo}/git/refs`,
+    token,
+    {
+      method: "POST",
+      body: {
+        ref: `refs/heads/${newBranch}`,
+        sha: baseSha,
+      },
+    }
+  );
+}
+
+/**
+ * Validate a Git branch (ref) name against standard Git rules
+ */
+export function isValidBranchName(name: string): boolean {
+  if (!name) return false;
+  if (/\s/.test(name)) return false;
+  if (/[~^:?*[\\]/.test(name)) return false;
+  if (name.includes("..")) return false;
+  if (name.startsWith("/") || name.endsWith("/")) return false;
+  if (name.startsWith(".") || name.endsWith(".")) return false;
+  if (name.endsWith(".lock")) return false;
+  if (name.includes("//")) return false;
+  if (name.includes("@{")) return false;
+  // Reject ASCII control characters
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x20\x7f]/.test(name)) return false;
+  return true;
+}
+
